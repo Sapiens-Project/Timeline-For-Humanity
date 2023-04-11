@@ -16,9 +16,10 @@ import (
 )
 
 var (
-	ccTimeline      Cache
-	ccPhoto         Cache
-	errNoIDProvided = errors.New("no ID provided")
+	ccTimeline          Cache
+	ccPhoto             Cache
+	errNoIDProvided     = errors.New("no ID provided")
+	internalServerError = http.StatusInternalServerError
 )
 
 type Dot struct {
@@ -30,10 +31,9 @@ type Dot struct {
 }
 
 type Timeline struct {
-	Alias string `json:"alias,omitempty"`
-	//User  string         `json:"user"`
-	ID   string         `json:"timelineID"`
-	Dots map[string]Dot `json:"dots"`
+	Alias string         `json:"alias,omitempty"`
+	ID    string         `json:"timelineID"`
+	Dots  map[string]Dot `json:"dots,omitempty"`
 }
 
 type User struct {
@@ -51,17 +51,24 @@ type GetResponse struct {
 	TimelineContent Timeline `json:"timeline_content,omitempty"`
 }
 
-func errorResponse(w http.ResponseWriter, err error) {
-	w.WriteHeader(http.StatusInternalServerError)
-	res := Base{Ok: false, Error: err.Error()}
-	jsn, err := json.Marshal(res)
+func response(w http.ResponseWriter, err error) {
+	var res Base
+
 	if err != nil {
-		log.Println("errorResponse", "json.Marshal", err)
+		w.WriteHeader(internalServerError)
+		res = Base{Ok: false, Error: err.Error()}
+	} else {
+		res = Base{Ok: true}
+	}
+
+	jsn, jsnErr := json.Marshal(res)
+	if jsnErr != nil {
+		log.Println("response", "json.Marshal", err)
 		return
 	}
 
-	if _, err := w.Write(jsn); err != nil {
-		log.Println("errorResponse", "w.Write", err)
+	if _, wrErr := w.Write(jsn); wrErr != nil {
+		log.Println("response", "w.Write", err)
 	}
 }
 
@@ -75,60 +82,121 @@ func encode(tl Timeline) ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-// da "esportare" un po' di roba dalla funzione
-// la chiave da dove la prende?
-// rq.Body è un ioReader quindi non si può usare direttamente, la funzione
-// io.ReadAll prende il contenuto di un ioReader e lo mettere in una var []byte
-// così si può usare per ottenere il json
+func decode(b []byte) (Timeline, error) {
+	var buf bytes.Buffer
+	var tl Timeline
+
+	dec := gob.NewDecoder(&buf)
+	if err := dec.Decode(&tl); err != nil {
+		return Timeline{}, fmt.Errorf("dec.Decode: %w", err)
+	}
+	return tl, nil
+}
+
+// writes Base: ok if Timeline is successfully inserted in database
 func putHandler(rw http.ResponseWriter, rq *http.Request) {
 	var (
 		tl Timeline
 		id string
 	)
 
-	if id = rq.URL.Query().Get("timeline-ID"); id == "" {
+	if id = rq.URL.Query().Get("id"); id == "" {
 		log.Println("putHandler", "rq.URL.Query().Get", errNoIDProvided)
-		errorResponse(rw, errNoIDProvided)
+		response(rw, errNoIDProvided)
 		return
 	}
 
-	// per ogni errore deve mandare una risposta negativa al frontend
 	body, err := io.ReadAll(rq.Body)
 	if err != nil {
 		log.Println("putHandler", "io.ReadAll", err)
-		errorResponse(rw, err)
+		response(rw, err)
 		return
 	}
 
 	if err := json.Unmarshal(body, &tl); err != nil {
 		log.Println("putHandler", "json.Unmarshal", err)
-		errorResponse(rw, err)
+		response(rw, err)
 		return
 	}
 
 	b, err := encode(tl)
 	if err != nil {
 		log.Println("putHandler", "encode", err)
-		errorResponse(rw, err)
+		response(rw, err)
 		return
 	}
 
-	if err := ccTimeline.Put([]byte(id), b); err != nil {
+	if err := ccTimeline.Put(id, string(b)); err != nil {
 		log.Println("putHandler", "ccTimeline.Put", err)
-		errorResponse(rw, err)
+		response(rw, err)
 		return
 	}
+
+	response(rw, nil)
 }
 
 func getHandler(rw http.ResponseWriter, rq *http.Request) {
-	// richiede la timeline con UUID
-	// controlla UUID nel db
-	// restituisce un json con le info dal db
-	errorResponse(rw, errors.New("dio porco"))
+	var (
+		tl Timeline
+		id string
+	)
+
+	if id = rq.URL.Query().Get("timeline-ID"); id == "" {
+		log.Println("getHandler", "rq.URL.Query().Get", errNoIDProvided)
+		response(rw, errNoIDProvided)
+		return
+	}
+
+	b, err := ccTimeline.Get(id)
+	if err != nil {
+		log.Println("getHandler", "ccTimeline.Get", err)
+		response(rw, err)
+		return
+	}
+
+	if tl, err = decode(b); err != nil {
+		log.Println("getHandler", "decode", err)
+		response(rw, err)
+		return
+	}
+
+	jsn, err := json.Marshal(GetResponse{
+		Base:            Base{Ok: true},
+		TimelineContent: tl,
+	})
+	if err != nil {
+		log.Println("getHandler", "decode", err)
+		response(rw, err)
+		return
+	}
+
+	if _, err = rw.Write(jsn); err != nil {
+		log.Println("getHandler", "rw.Write", err)
+		response(rw, err)
+		return
+	}
 }
 
+// if a timeline-ID is specified but not a dot-ID, it means that the whole
+// timeline should be deleted, if both are specified, than only the single dot
+// inside the timeline should be deleted, and a new timeline without that dot
+// should be returned. If a timeline-ID is not specified, than del returns errNoIDProvided
 func delHandler(rw http.ResponseWriter, rq *http.Request) {
+	tlID := rq.URL.Query().Get("id")
+	if tlID == "" {
+		log.Println("delHandler", "rq.URL.Query().Get", errNoIDProvided)
+		response(rw, errNoIDProvided)
+		return
+	}
 
+	dotID := rq.URL.Query().Get("dot-id")
+	err := ccTimeline.Del(tlID, dotID)
+	if err != nil {
+		log.Println("delHandler", "ccTimeline.Del", err)
+		response(rw, err)
+		return
+	}
+	response(rw, nil)
 }
 
 func main() {
