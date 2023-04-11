@@ -52,10 +52,8 @@ type GetResponse struct {
 }
 
 func okres(w http.ResponseWriter) {
-	var res = Base{OK: true}
-
 	w.WriteHeader(http.StatusOK)
-	jsn, err := json.Marshal(res)
+	jsn, err := json.Marshal(Base{OK: true})
 	if err != nil {
 		log.Println("okres", "json.Marshal", err)
 		return
@@ -71,9 +69,8 @@ func eres(w http.ResponseWriter, err error) {
 		return
 	}
 
-	res := Base{OK: false, Error: err.Error()}
 	w.WriteHeader(http.StatusInternalServerError)
-	jsn, err := json.Marshal(res)
+	jsn, err := json.Marshal(Base{OK: false, Error: err.Error()})
 	if err != nil {
 		log.Println("eres", "json.Marshal", err)
 		return
