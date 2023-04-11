@@ -5,6 +5,7 @@ import (
 	"encoding/gob"
 	"encoding/json"
 	"errors"
+	"flag"
 	"fmt"
 	"io"
 	"log"
@@ -208,9 +209,12 @@ func delHandler(w http.ResponseWriter, rq *http.Request) {
 
 func main() {
 	var (
+		port string
 		mux  = http.NewServeMux()
-		port = "8080"
 	)
+
+	flag.StringVar(&port, "p", ":8080", "The port the server will be listening to.")
+	flag.Parse()
 
 	ucd, err := os.UserCacheDir()
 	if err != nil {
@@ -226,5 +230,5 @@ func main() {
 
 	log.Printf("running on port %s...", port)
 	handler := cors.Default().Handler(mux)
-	log.Fatal(http.ListenAndServe(fmt.Sprintf(":%s", port), handler))
+	log.Fatal(http.ListenAndServe(port, handler))
 }
