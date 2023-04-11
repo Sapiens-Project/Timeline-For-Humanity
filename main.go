@@ -16,10 +16,9 @@ import (
 )
 
 var (
-	ccTimeline          Cache
-	ccPhoto             Cache
-	errNoIDProvided     = errors.New("no ID provided")
-	internalServerError = http.StatusInternalServerError
+	ccTimeline      Cache
+	ccPhoto         Cache
+	errNoIDProvided = errors.New("no ID provided")
 )
 
 type Dot struct {
@@ -42,33 +41,44 @@ type User struct {
 }
 
 type Base struct {
-	Ok    bool   `json:"ok"`
+	OK    bool   `json:"ok"`
 	Error string `json:"error,omitempty"`
 }
 
 type GetResponse struct {
 	Base
-	TimelineContent Timeline `json:"timeline_content,omitempty"`
+	Timeline Timeline `json:"timeline_content,omitempty"`
 }
 
-func response(w http.ResponseWriter, err error) {
-	var res Base
+func okres(w http.ResponseWriter) {
+	var res = Base{OK: true}
 
+	w.WriteHeader(http.StatusOK)
+	jsn, err := json.Marshal(res)
 	if err != nil {
-		w.WriteHeader(internalServerError)
-		res = Base{Ok: false, Error: err.Error()}
-	} else {
-		res = Base{Ok: true}
+		log.Println("okres", "json.Marshal", err)
+		return
 	}
+	if _, err := w.Write(jsn); err != nil {
+		log.Println("okres", "w.Write", err)
+	}
+}
 
-	jsn, jsnErr := json.Marshal(res)
-	if jsnErr != nil {
-		log.Println("response", "json.Marshal", err)
+func eres(w http.ResponseWriter, err error) {
+	if err == nil {
+		okres(w)
 		return
 	}
 
-	if _, wrErr := w.Write(jsn); wrErr != nil {
-		log.Println("response", "w.Write", err)
+	res := Base{OK: false, Error: err.Error()}
+	w.WriteHeader(http.StatusInternalServerError)
+	jsn, err := json.Marshal(res)
+	if err != nil {
+		log.Println("eres", "json.Marshal", err)
+		return
+	}
+	if _, err := w.Write(jsn); err != nil {
+		log.Println("eres", "w.Write", err)
 	}
 }
 
@@ -83,8 +93,10 @@ func encode(tl Timeline) ([]byte, error) {
 }
 
 func decode(b []byte) (Timeline, error) {
-	var buf bytes.Buffer
-	var tl Timeline
+	var (
+		tl  Timeline
+		buf bytes.Buffer
+	)
 
 	dec := gob.NewDecoder(&buf)
 	if err := dec.Decode(&tl); err != nil {
@@ -93,110 +105,105 @@ func decode(b []byte) (Timeline, error) {
 	return tl, nil
 }
 
-// writes Base: ok if Timeline is successfully inserted in database
-func putHandler(rw http.ResponseWriter, rq *http.Request) {
-	var (
-		tl Timeline
-		id string
-	)
+func putTimeline(id string, tl Timeline) error {
+	b, err := encode(tl)
+	if err != nil {
+		return fmt.Errorf("saveTimeline: %w", err)
+	}
+	return ccTimeline.Put([]byte(id), b)
+}
 
-	if id = rq.URL.Query().Get("id"); id == "" {
+func getTimeline(id string) (Timeline, error) {
+	b, err := ccTimeline.Get([]byte(id))
+	if err != nil {
+		return Timeline{}, fmt.Errorf("getTimeline: %w", err)
+	}
+	return decode(b)
+}
+
+func delTimeline(id string) error {
+	return ccTimeline.Del([]byte(id))
+}
+
+// putHandler updates an existing timeline with the one provided, it also
+// creates the timeline if it didn't exist.
+func putHandler(w http.ResponseWriter, rq *http.Request) {
+	var tl Timeline
+
+	id := rq.URL.Query().Get("id")
+	if id == "" {
 		log.Println("putHandler", "rq.URL.Query().Get", errNoIDProvided)
-		response(rw, errNoIDProvided)
+		eres(w, errNoIDProvided)
 		return
 	}
 
 	body, err := io.ReadAll(rq.Body)
 	if err != nil {
 		log.Println("putHandler", "io.ReadAll", err)
-		response(rw, err)
+		eres(w, err)
 		return
 	}
 
 	if err := json.Unmarshal(body, &tl); err != nil {
 		log.Println("putHandler", "json.Unmarshal", err)
-		response(rw, err)
+		eres(w, err)
 		return
 	}
 
-	b, err := encode(tl)
-	if err != nil {
-		log.Println("putHandler", "encode", err)
-		response(rw, err)
+	if err := putTimeline(id, tl); err != nil {
+		log.Println("putHandler", "putTimeline", err)
+		eres(w, err)
 		return
 	}
-
-	if err := ccTimeline.Put(id, string(b)); err != nil {
-		log.Println("putHandler", "ccTimeline.Put", err)
-		response(rw, err)
-		return
-	}
-
-	response(rw, nil)
+	okres(w)
 }
 
-func getHandler(rw http.ResponseWriter, rq *http.Request) {
-	var (
-		tl Timeline
-		id string
-	)
-
-	if id = rq.URL.Query().Get("timeline-ID"); id == "" {
+// getHandler responds with the timeline associated with the given ID.
+func getHandler(w http.ResponseWriter, rq *http.Request) {
+	id := rq.URL.Query().Get("id")
+	if id == "" {
 		log.Println("getHandler", "rq.URL.Query().Get", errNoIDProvided)
-		response(rw, errNoIDProvided)
+		eres(w, errNoIDProvided)
 		return
 	}
 
-	b, err := ccTimeline.Get(id)
+	timeline, err := getTimeline(id)
 	if err != nil {
-		log.Println("getHandler", "ccTimeline.Get", err)
-		response(rw, err)
-		return
-	}
-
-	if tl, err = decode(b); err != nil {
-		log.Println("getHandler", "decode", err)
-		response(rw, err)
+		log.Println("getHandler", "getTimeline", err)
+		eres(w, err)
 		return
 	}
 
 	jsn, err := json.Marshal(GetResponse{
-		Base:            Base{Ok: true},
-		TimelineContent: tl,
+		Base:     Base{OK: true},
+		Timeline: timeline,
 	})
 	if err != nil {
 		log.Println("getHandler", "decode", err)
-		response(rw, err)
+		eres(w, err)
 		return
 	}
 
-	if _, err = rw.Write(jsn); err != nil {
-		log.Println("getHandler", "rw.Write", err)
-		response(rw, err)
+	if _, err = w.Write(jsn); err != nil {
+		log.Println("getHandler", "w.Write", err)
 		return
 	}
 }
 
-// if a timeline-ID is specified but not a dot-ID, it means that the whole
-// timeline should be deleted, if both are specified, than only the single dot
-// inside the timeline should be deleted, and a new timeline without that dot
-// should be returned. If a timeline-ID is not specified, than del returns errNoIDProvided
-func delHandler(rw http.ResponseWriter, rq *http.Request) {
-	tlID := rq.URL.Query().Get("id")
-	if tlID == "" {
+// delHandler deletes a timeline from the timeline cache.
+func delHandler(w http.ResponseWriter, rq *http.Request) {
+	id := rq.URL.Query().Get("id")
+	if id == "" {
 		log.Println("delHandler", "rq.URL.Query().Get", errNoIDProvided)
-		response(rw, errNoIDProvided)
+		eres(w, errNoIDProvided)
 		return
 	}
-
-	dotID := rq.URL.Query().Get("dot-id")
-	err := ccTimeline.Del(tlID, dotID)
-	if err != nil {
-		log.Println("delHandler", "ccTimeline.Del", err)
-		response(rw, err)
+	if err := delTimeline(id); err != nil {
+		log.Println("delHandler", "delTimeline", err)
+		eres(w, err)
 		return
 	}
-	response(rw, nil)
+	okres(w)
 }
 
 func main() {
