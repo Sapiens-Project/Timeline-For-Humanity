@@ -1,6 +1,10 @@
 package main
 
-import "github.com/akrylysov/pogreb"
+import (
+	"errors"
+
+	"github.com/akrylysov/pogreb"
+)
 
 type Cache string
 
@@ -39,4 +43,37 @@ func (c Cache) Del(key []byte) error {
 	}
 	defer db.Close()
 	return db.Delete(key)
+}
+
+// Fold iterates over all the key-value pairs stored in the cache and calls the
+// function in input passing those values as argument.
+func (c Cache) Fold(fn func(key, val []byte) error) (err error) {
+	cc, err := pogreb.Open(string(c), nil)
+	if err != nil {
+		return err
+	}
+	defer cc.Close()
+
+	iter := cc.Items()
+	for err == nil {
+		if key, val, err := iter.Next(); err == nil {
+			err = fn(key, val)
+		}
+	}
+
+	if errors.Is(err, pogreb.ErrIterationDone) {
+		err = nil
+	}
+	return
+}
+
+// Compact reduces the size of the cache on the disk.
+func (c Cache) Compact() error {
+	cc, err := pogreb.Open(string(c), nil)
+	if err != nil {
+		return err
+	}
+	defer cc.Close()
+	_, err = cc.Compact()
+	return err
 }
