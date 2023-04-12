@@ -52,7 +52,6 @@ type GetResponse struct {
 }
 
 func okres(w http.ResponseWriter) {
-	w.WriteHeader(http.StatusOK)
 	jsn, err := json.Marshal(Base{OK: true})
 	if err != nil {
 		log.Println("okres", "json.Marshal", err)
