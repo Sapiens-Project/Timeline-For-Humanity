@@ -1,4 +1,4 @@
-module server
+module timeline-for-humanity
 
 go 1.20
 

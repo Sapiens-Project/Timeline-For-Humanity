@@ -32,7 +32,7 @@ type Dot struct {
 
 type Timeline struct {
 	Alias string         `json:"alias,omitempty"`
-	ID    string         `json:"timelineID"`
+	ID    string         `json:"id"`
 	Dots  map[string]Dot `json:"dots,omitempty"`
 }
 
@@ -90,12 +90,9 @@ func encode(tl Timeline) ([]byte, error) {
 }
 
 func decode(b []byte) (Timeline, error) {
-	var (
-		tl  Timeline
-		buf bytes.Buffer
-	)
+	var tl Timeline
 
-	dec := gob.NewDecoder(&buf)
+	dec := gob.NewDecoder(bytes.NewReader(b))
 	if err := dec.Decode(&tl); err != nil {
 		return Timeline{}, fmt.Errorf("dec.Decode: %w", err)
 	}
